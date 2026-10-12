@@ -1,0 +1,72 @@
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
+struct BitSourceStatic
+{
+    char* m_staticBits;
+    long m_totalBytes;
+
+    BitSourceStatic() : m_staticBits(nullptr), m_totalBytes(0) {}
+    ~BitSourceStatic()
+    {
+        if(m_staticBits)
+        {
+            free(m_staticBits);
+            m_staticBits = nullptr;
+        }
+    }
+
+    bool Alloc_Static_Block(long numBytes)
+    {
+        if(m_staticBits)
+        {
+            free(m_staticBits);
+            m_staticBits = nullptr;
+        }
+        m_staticBits = static_cast<char*>(malloc(numBytes));
+        m_totalBytes = numBytes;
+        if(!m_staticBits)
+        {
+            m_totalBytes = 0;
+            return false;
+        }
+        memset(m_staticBits, 0x41, numBytes);
+        return true;
+    }
+};
+
+struct AudioStaticPlayer
+{
+    BitSourceStatic* m_bitSource;
+
+    AudioStaticPlayer() : m_bitSource(nullptr) {}
+
+    // Vulnerable: dereference dangling m_bitSource pointer
+    void Read_From_BitSource()
+    {
+        if (!m_bitSource)
+            return;
+        // Use-After-Free read: access member of already deleted BitSourceStatic object
+        char val = m_bitSource->m_staticBits[0];
+        (void)val;
+    }
+};
+
+int main()
+{
+    AudioStaticPlayer player;
+    BitSourceStatic* bitSrc = new BitSourceStatic();
+
+    bitSrc->Alloc_Static_Block(32);
+    player.m_bitSource = bitSrc;
+
+    // Delete the BitSourceStatic object, player.m_bitSource becomes dangling pointer
+    delete bitSrc;
+
+    // Trigger UAF: access the dangling pointer
+    player.Read_From_BitSource();
+
+    return 0;
+}
+
