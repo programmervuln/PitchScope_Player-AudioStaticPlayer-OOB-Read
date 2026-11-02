@@ -109,7 +109,7 @@ SUMMARY: AddressSanitizer: heap-buffer-overflow /home/lloyd/Documents/PitchScope
 1. Compile with Clang + AddressSanitizer
 ```bash
 clang++ -fsanitize=address vul3_harness.cpp -o poc_vul3
-(vul3_harness.cpp is renamed as poc.txt in our repo)
+
 
 ./poc_vul3
 
