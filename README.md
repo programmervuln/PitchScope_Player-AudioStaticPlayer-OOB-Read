@@ -70,6 +70,8 @@ Suggested description
 An out-of-bounds read vulnerability (CWE-125) exists in PitchScope Player in AudioStaticPlayer::Load_Next_Data_Forward_OOB. The program reads past the end of a heap-allocated static audio buffer. Successful exploitation may result in denial of service and memory information disclosure. Arbitrary code execution is not expected for this out-of-bounds read.
 plaintext
 
+
+
 Discoverer(s)/Credits info
 `Lidi Jie, School of Cyber Science and Engineering, Wuhan University`
 
